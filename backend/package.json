@@ -12,7 +12,9 @@
   "type": "commonjs",
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
+    "canvas": "^3.2.3",
     "cors": "^2.8.6",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "face-api.js": "^0.22.2"
   }
 }

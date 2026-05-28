@@ -1,6 +1,7 @@
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../lib/supabase';
 
 export default function RegistroScreen() {
@@ -9,21 +10,47 @@ export default function RegistroScreen() {
   const [dni, setDni] = useState('');
   const [loading, setLoading] = useState(false);
   const [usuarios, setUsuarios] = useState<any[]>([]);
+  const [usuariosFiltrados, setUsuariosFiltrados] = useState<any[]>([]);
+  const [busqueda, setBusqueda] = useState('');
   const [vista, setVista] = useState<'form' | 'lista'>('form');
   const [fotoCapturada, setFotoCapturada] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
+  const [cameraActiva, setCameraActiva] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<any>(null);
   const videoRef = useRef<any>(null);
   const canvasRef = useRef<any>(null);
   const streamRef = useRef<any>(null);
 
   useEffect(() => {
-    if (Platform.OS === 'web' && vista === 'form') {
-      startCamera();
+    if (vista === 'form') {
+      if (Platform.OS === 'web') {
+        startWebCamera();
+      } else {
+        if (permission?.granted) {
+          setCameraReady(true);
+        } else {
+          requestPermission();
+        }
+      }
     }
     return () => stopCamera();
-  }, [vista]);
+  }, [vista, permission]);
 
-  const startCamera = async () => {
+  useEffect(() => {
+    if (busqueda.trim() === '') {
+      setUsuariosFiltrados(usuarios);
+    } else {
+      setUsuariosFiltrados(
+        usuarios.filter(u =>
+          u.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
+          u.dni.includes(busqueda)
+        )
+      );
+    }
+  }, [busqueda, usuarios]);
+
+  const startWebCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: 200, height: 200 }
@@ -45,7 +72,7 @@ export default function RegistroScreen() {
     }
   };
 
-  const capturarFoto = () => {
+  const capturarFotoWeb = () => {
     if (!videoRef.current || !canvasRef.current) return;
     const canvas = canvasRef.current;
     const video = videoRef.current;
@@ -56,8 +83,27 @@ export default function RegistroScreen() {
     ctx.scale(-1, 1);
     ctx.drawImage(video, -200, 0, 200, 200);
     ctx.restore();
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-    setFotoCapturada(dataUrl);
+    setFotoCapturada(canvas.toDataURL('image/jpeg', 0.8));
+  };
+
+  const capturarFotoNativa = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Error', 'Cámara no lista, esperá un momento');
+      return;
+    }
+    try {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5, base64: true });
+      if (photo?.base64) {
+        setFotoCapturada(`data:image/jpeg;base64,${photo.base64}`);
+      } else if (photo?.uri) {
+        setFotoCapturada(photo.uri);
+      } else {
+        Alert.alert('Error', 'No se pudo obtener la imagen');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Error al capturar');
+    }
   };
 
   const registrar = async () => {
@@ -67,27 +113,57 @@ export default function RegistroScreen() {
     }
     setLoading(true);
     const { error } = await supabase.from('usuarios').insert({
-      nombre,
-      dni,
-      autorizado: true,
-      foto_url: fotoCapturada ?? '',
+      nombre, dni, autorizado: true, foto_url: fotoCapturada ?? '',
     });
     setLoading(false);
     if (error) {
       Alert.alert('Error', error.message);
     } else {
       Alert.alert('✅ Listo', `${nombre} registrado correctamente`);
-      setNombre('');
-      setDni('');
-      setFotoCapturada(null);
+      setNombre(''); setDni(''); setFotoCapturada(null);
+      cargarUsuarios();
     }
   };
 
   const cargarUsuarios = async () => {
     stopCamera();
-    const { data } = await supabase.from('usuarios').select('*');
+    const { data, error } = await supabase.from('usuarios').select('*').order('id', { ascending: false });
+    if (error) {
+      Alert.alert('Error al cargar', error.message);
+    }
     if (data) setUsuarios(data);
     setVista('lista');
+  };
+
+  const eliminarUsuario = (id: number, nombre: string) => {
+    Alert.alert(
+      '🗑️ Eliminar usuario',
+      `¿Estás seguro que querés eliminar a ${nombre}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar', style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.from('usuarios').delete().eq('id', id);
+            if (error) {
+              Alert.alert('Error', error.message);
+            } else {
+              setUsuarios(prev => prev.filter(u => u.id !== id));
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const toggleAutorizado = async (id: number, autorizado: boolean) => {
+    const { error } = await supabase
+      .from('usuarios')
+      .update({ autorizado: !autorizado })
+      .eq('id', id);
+    if (!error) {
+      setUsuarios(prev => prev.map(u => u.id === id ? { ...u, autorizado: !autorizado } : u));
+    }
   };
 
   return (
@@ -137,47 +213,35 @@ export default function RegistroScreen() {
             />
 
             <Text style={styles.label}>Foto facial</Text>
-
-            {/* Cámara o foto capturada */}
             <View style={styles.cameraWrap}>
               {!fotoCapturada ? (
                 <>
-                  {Platform.OS === 'web' && (
-                    // @ts-ignore
-                    <video
-                      ref={videoRef}
-                      style={{
-                        width: 200, height: 200,
-                        borderRadius: 100,
-                        objectFit: 'cover',
-                        transform: 'scaleX(-1)',
-                      }}
-                      autoPlay muted playsInline
-                    />
-                  )}
-                  {/* Canvas oculto para captura */}
-                  {Platform.OS === 'web' && (
-                    // @ts-ignore
-                    <canvas ref={canvasRef} style={{ display: 'none' }} />
+                  {Platform.OS === 'web' ? (
+                    <>
+                      {/* @ts-ignore */}
+                      <video ref={videoRef} style={{ width: 200, height: 200, borderRadius: 100, objectFit: 'cover', transform: 'scaleX(-1)' }} autoPlay muted playsInline />
+                      {/* @ts-ignore */}
+                      <canvas ref={canvasRef} style={{ display: 'none' }} />
+                    </>
+                  ) : permission?.granted ? (
+                    <CameraView ref={cameraRef} style={styles.nativeCamera} facing="front" onCameraReady={() => setCameraActiva(true)} />
+                  ) : (
+                    <TouchableOpacity style={styles.btnCapturar} onPress={requestPermission}>
+                      <Text style={styles.btnCapturarText}>📷 Dar permiso de cámara</Text>
+                    </TouchableOpacity>
                   )}
                   <TouchableOpacity
-                    style={[styles.btnCapturar, !cameraReady && { opacity: 0.5 }]}
-                    onPress={capturarFoto}
-                    disabled={!cameraReady}
+                    style={[styles.btnCapturar, (!cameraReady && !cameraActiva) && { opacity: 0.5 }]}
+                    onPress={Platform.OS === 'web' ? capturarFotoWeb : capturarFotoNativa}
+                    disabled={Platform.OS === 'web' ? !cameraReady : !cameraActiva}
                   >
                     <Text style={styles.btnCapturarText}>📷 Capturar foto</Text>
                   </TouchableOpacity>
                 </>
               ) : (
                 <>
-                  {Platform.OS === 'web' && (
-                    // @ts-ignore
-                    <img
-                      src={fotoCapturada}
-                      style={{ width: 200, height: 200, borderRadius: 100, objectFit: 'cover' }}
-                    />
-                  )}
-                  <TouchableOpacity style={styles.btnRetomar} onPress={() => setFotoCapturada(null)}>
+                  <Image source={{ uri: fotoCapturada }} style={styles.fotoPreview} />
+                  <TouchableOpacity style={styles.btnRetomar} onPress={() => { setFotoCapturada(null); setCameraActiva(false); }}>
                     <Text style={styles.btnRetomarText}>🔄 Retomar foto</Text>
                   </TouchableOpacity>
                 </>
@@ -189,26 +253,30 @@ export default function RegistroScreen() {
               onPress={registrar}
               disabled={loading}
             >
-              <Text style={styles.btnPrimaryText}>
-                {loading ? 'Registrando...' : 'Registrar usuario →'}
-              </Text>
+              <Text style={styles.btnPrimaryText}>{loading ? 'Registrando...' : 'Registrar usuario →'}</Text>
             </TouchableOpacity>
           </View>
         )}
 
         {vista === 'lista' && (
           <View style={styles.lista}>
-            {usuarios.length === 0 ? (
-              <Text style={styles.emptyText}>No hay usuarios registrados aún.</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="🔍 Buscar por nombre o DNI..."
+              placeholderTextColor="#555577"
+              value={busqueda}
+              onChangeText={setBusqueda}
+            />
+
+            <Text style={styles.countText}>{usuariosFiltrados.length} usuario{usuariosFiltrados.length !== 1 ? 's' : ''}</Text>
+
+            {usuariosFiltrados.length === 0 ? (
+              <Text style={styles.emptyText}>No se encontraron usuarios.</Text>
             ) : (
-              usuarios.map((u) => (
+              usuariosFiltrados.map((u) => (
                 <View key={u.id} style={styles.usuarioCard}>
-                  {u.foto_url && Platform.OS === 'web' ? (
-                    // @ts-ignore
-                    <img
-                      src={u.foto_url}
-                      style={{ width: 44, height: 44, borderRadius: 22, objectFit: 'cover' }}
-                    />
+                  {u.foto_url ? (
+                    <Image source={{ uri: u.foto_url }} style={styles.usuarioFoto} />
                   ) : (
                     <View style={styles.usuarioAvatar}>
                       <Text style={styles.usuarioAvatarText}>{u.nombre.charAt(0)}</Text>
@@ -218,8 +286,19 @@ export default function RegistroScreen() {
                     <Text style={styles.usuarioNombre}>{u.nombre}</Text>
                     <Text style={styles.usuarioDni}>DNI: {u.dni}</Text>
                   </View>
-                  <View style={[styles.badge, u.autorizado ? styles.badgeOn : styles.badgeOff]}>
-                    <Text style={styles.badgeText}>{u.autorizado ? '✅' : '🚫'}</Text>
+                  <View style={styles.acciones}>
+                    <TouchableOpacity
+                      style={[styles.btnAccion, u.autorizado ? styles.btnDesactivar : styles.btnActivar]}
+                      onPress={() => toggleAutorizado(u.id, u.autorizado)}
+                    >
+                      <Text style={styles.btnAccionText}>{u.autorizado ? '🔒' : '🔓'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.btnAccion, styles.btnEliminar]}
+                      onPress={() => eliminarUsuario(u.id, u.nombre)}
+                    >
+                      <Text style={styles.btnAccionText}>🗑️</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               ))
@@ -252,6 +331,8 @@ const styles = StyleSheet.create({
     borderWidth: 0.5, borderColor: '#2a2a4a',
   },
   cameraWrap: { alignItems: 'center', gap: 12, paddingVertical: 8 },
+  nativeCamera: { width: 200, height: 200, borderRadius: 100, overflow: 'hidden' },
+  fotoPreview: { width: 200, height: 200, borderRadius: 100 },
   btnCapturar: {
     backgroundColor: '#1a1a2e', borderRadius: 12,
     paddingVertical: 12, paddingHorizontal: 24,
@@ -270,12 +351,14 @@ const styles = StyleSheet.create({
   },
   btnPrimaryText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   lista: { gap: 10 },
+  countText: { fontSize: 12, color: '#555577', textAlign: 'right' },
   emptyText: { color: '#8888aa', textAlign: 'center', marginTop: 20 },
   usuarioCard: {
     backgroundColor: '#1a1a2e', borderRadius: 14,
     padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12,
     borderWidth: 0.5, borderColor: '#2a2a4a',
   },
+  usuarioFoto: { width: 44, height: 44, borderRadius: 22 },
   usuarioAvatar: {
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: '#3355ff', alignItems: 'center', justifyContent: 'center',
@@ -284,8 +367,10 @@ const styles = StyleSheet.create({
   usuarioInfo: { flex: 1 },
   usuarioNombre: { fontSize: 15, fontWeight: '600', color: '#fff' },
   usuarioDni: { fontSize: 12, color: '#8888aa', marginTop: 2 },
-  badge: { padding: 6, borderRadius: 8 },
-  badgeOn: { backgroundColor: '#0a2a1a' },
-  badgeOff: { backgroundColor: '#2a0a0a' },
-  badgeText: { fontSize: 16 },
+  acciones: { flexDirection: 'row', gap: 8 },
+  btnAccion: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  btnActivar: { backgroundColor: '#0a2a1a' },
+  btnDesactivar: { backgroundColor: '#2a1a0a' },
+  btnEliminar: { backgroundColor: '#2a0a0a' },
+  btnAccionText: { fontSize: 16 },
 });

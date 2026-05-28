@@ -1,16 +1,22 @@
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
+const BACKEND_URL = 'http://localhost:3001';
 
 export default function ScanScreen() {
   const router = useRouter();
   const [status, setStatus] = useState('Posicioná tu rostro en el círculo');
   const [scanning, setScanning] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
   const progressAnim = useRef(new Animated.Value(0)).current;
   const scanLineAnim = useRef(new Animated.Value(0)).current;
   const videoRef = useRef<any>(null);
+  const canvasRef = useRef<any>(null);
   const streamRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
 
   useEffect(() => {
     Animated.loop(
@@ -20,20 +26,25 @@ export default function ScanScreen() {
       ])
     ).start();
 
-    // Iniciar cámara en web
     if (Platform.OS === 'web') {
-      startCamera();
+      startWebCamera();
+    } else {
+      if (permission?.granted) {
+        setCameraReady(true);
+        setStatus('Cámara lista — presioná Iniciar');
+      } else {
+        requestPermission();
+      }
     }
 
     return () => {
-      // Apagar cámara al salir
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track: any) => track.stop());
       }
     };
-  }, []);
+  }, [permission]);
 
-  const startCamera = async () => {
+  const startWebCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: 240, height: 240 }
@@ -50,6 +61,33 @@ export default function ScanScreen() {
     }
   };
 
+  const capturarFotoWeb = (): string | null => {
+    if (!videoRef.current || !canvasRef.current) return null;
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    canvas.width = 240;
+    canvas.height = 240;
+    const ctx = canvas.getContext('2d');
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -240, 0, 240, 240);
+    ctx.restore();
+    return canvas.toDataURL('image/jpeg', 0.8);
+  };
+
+  const capturarFotoNativa = async (): Promise<string | null> => {
+    if (!cameraRef.current) return null;
+    try {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5, base64: true });
+      if (photo?.base64) return `data:image/jpeg;base64,${photo.base64}`;
+      if (photo?.uri) return photo.uri;
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
   const startScan = async () => {
     setScanning(true);
     const steps = [
@@ -63,13 +101,21 @@ export default function ScanScreen() {
     const run = async () => {
       if (i >= steps.length) {
         try {
-          const response = await fetch('http://localhost:3001/verificar', {
+          // Capturar foto según plataforma
+          let fotoBase64: string | null = null;
+          if (Platform.OS === 'web') {
+            fotoBase64 = capturarFotoWeb();
+          } else {
+            fotoBase64 = await capturarFotoNativa();
+          }
+
+          const response = await fetch(`${BACKEND_URL}/verificar`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nombre: 'Juan García' }),
+            body: JSON.stringify({ fotoBase64 }),
           });
           const data = await response.json();
-          // Apagar cámara antes de navegar
+
           if (streamRef.current) {
             streamRef.current.getTracks().forEach((track: any) => track.stop());
           }
@@ -101,7 +147,6 @@ export default function ScanScreen() {
       <Text style={styles.title}>Verificación facial</Text>
       <Text style={styles.subtitle}>Mirá directo a la cámara</Text>
 
-      {/* Marco con cámara real */}
       <View style={styles.frameWrap}>
         <View style={styles.frame}>
           <View style={[styles.corner, styles.tl]} />
@@ -110,22 +155,30 @@ export default function ScanScreen() {
           <View style={[styles.corner, styles.br]} />
 
           {Platform.OS === 'web' ? (
-            // @ts-ignore
-            <video
-              ref={videoRef}
-              style={{
-                width: 240,
-                height: 240,
-                objectFit: 'cover',
-                borderRadius: 120,
-                transform: 'scaleX(-1)', // efecto espejo
+            <>
+              {/* @ts-ignore */}
+              <video
+                ref={videoRef}
+                style={{ width: 240, height: 240, objectFit: 'cover', borderRadius: 120, transform: 'scaleX(-1)' }}
+                autoPlay muted playsInline
+              />
+              {/* @ts-ignore */}
+              <canvas ref={canvasRef} style={{ display: 'none' }} />
+            </>
+          ) : permission?.granted ? (
+            <CameraView
+              ref={cameraRef}
+              style={styles.nativeCamera}
+              facing="front"
+              onCameraReady={() => {
+                setCameraReady(true);
+                setStatus('Cámara lista — presioná Iniciar');
               }}
-              autoPlay
-              muted
-              playsInline
             />
           ) : (
-            <Text style={styles.faceEmoji}>👤</Text>
+            <TouchableOpacity onPress={requestPermission} style={styles.permBtn}>
+              <Text style={styles.permText}>📷 Dar permiso de cámara</Text>
+            </TouchableOpacity>
           )}
 
           {scanning && (
@@ -134,7 +187,6 @@ export default function ScanScreen() {
         </View>
       </View>
 
-      {/* Estado */}
       <View style={styles.statusRow}>
         <View style={[styles.dot, { backgroundColor: cameraReady ? '#22cc66' : '#ff4455' }]} />
         <Text style={styles.statusText}>{cameraReady ? 'Cámara activa' : 'Iniciando cámara...'}</Text>
@@ -174,16 +226,19 @@ const styles = StyleSheet.create({
     width: 240, height: 240,
     borderRadius: 120,
     backgroundColor: '#1a1a2e',
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
     overflow: 'hidden',
     position: 'relative',
   },
+  nativeCamera: { width: 240, height: 240 },
   corner: { position: 'absolute', width: 28, height: 28, borderColor: '#3366ff', borderWidth: 3, zIndex: 10 },
   tl: { top: 16, left: 16, borderRightWidth: 0, borderBottomWidth: 0, borderRadius: 4 },
   tr: { top: 16, right: 16, borderLeftWidth: 0, borderBottomWidth: 0, borderRadius: 4 },
   bl: { bottom: 16, left: 16, borderRightWidth: 0, borderTopWidth: 0, borderRadius: 4 },
   br: { bottom: 16, right: 16, borderLeftWidth: 0, borderTopWidth: 0, borderRadius: 4 },
-  faceEmoji: { fontSize: 80 },
+  permBtn: { alignItems: 'center', padding: 16 },
+  permText: { color: '#3355ff', fontSize: 13, textAlign: 'center' },
   scanLine: { position: 'absolute', width: 200, height: 2, backgroundColor: 'rgba(50,150,255,0.8)', borderRadius: 1, zIndex: 10 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dot: { width: 10, height: 10, borderRadius: 5 },
