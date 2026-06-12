@@ -17,14 +17,19 @@ const supabase = createClient(
 const FACEPP_API_KEY = 'y38ey6GSji_ZygZZ7CgDTsYkcB9mjXEG';
 const FACEPP_API_SECRET = '0FvNd8BwEnA3FkKG7TLEhidXYVA8tjTw';
 
-// Detectar rostro y obtener face_token
-async function detectarRostro(base64Image) {
+// Detectar rostro (Soporta Base64 o URL de internet)
+async function detectarRostro(sourceImage, isUrl = false) {
   try {
-    const imageData = base64Image.replace(/^data:image\/\w+;base64,/, '');
     const form = new FormData();
     form.append('api_key', FACEPP_API_KEY);
     form.append('api_secret', FACEPP_API_SECRET);
-    form.append('image_base64', imageData);
+
+    if (isUrl) {
+      form.append('image_url', sourceImage);
+    } else {
+      const imageData = sourceImage.replace(/^data:image\/\w+;base64,/, '');
+      form.append('image_base64', imageData);
+    }
 
     const response = await axios.post(
       'https://api-us.faceplusplus.com/facepp/v3/detect',
@@ -78,8 +83,8 @@ app.post('/verificar', async (req, res) => {
   }
 
   try {
-    // Detectar rostro en la foto capturada
-    const tokenCapturado = await detectarRostro(fotoBase64);
+    // Detectar rostro en la foto capturada (viene en base64)
+    const tokenCapturado = await detectarRostro(fotoBase64, false);
     if (!tokenCapturado) {
       return res.json({
         autorizado: false,
@@ -88,7 +93,7 @@ app.post('/verificar', async (req, res) => {
       });
     }
 
-    // Obtener usuarios con foto
+    // Obtener usuarios con foto de Supabase
     const { data: usuarios, error } = await supabase
       .from('usuarios')
       .select('*')
@@ -98,13 +103,15 @@ app.post('/verificar', async (req, res) => {
       return res.json({ autorizado: false, confianza: 0, mensaje: 'No hay usuarios registrados con foto' });
     }
 
-    // Comparar con cada usuario
     let mejorMatch = null;
     let mayorConfianza = 0;
 
+    // Comparar con cada usuario
     for (const usuario of usuarios) {
       if (!usuario.foto_url) continue;
-      const tokenGuardado = await detectarRostro(usuario.foto_url);
+      
+      // Enviamos la URL especificando true
+      const tokenGuardado = await detectarRostro(usuario.foto_url, true);
       if (!tokenGuardado) continue;
 
       const confianza = await compararRostros(tokenCapturado, tokenGuardado);
@@ -147,7 +154,12 @@ app.get('/usuarios', async (req, res) => {
   res.json(data);
 });
 
-const PORT = 3001;
-app.listen(PORT, () => {
-  console.log(`✅ Backend corriendo en http://localhost:${PORT}`);
-});
+// Exportación para Vercel serverless y fallback de puerto local
+const PORT = process.env.PORT || 3001;
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`✅ Backend corriendo localmente en http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;

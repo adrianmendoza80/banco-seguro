@@ -3,7 +3,8 @@ import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-const BACKEND_URL = 'http://localhost:3001';
+// Tu backend local corriendo con tu IP de red privada
+const BACKEND_URL = 'http://192.168.0.105:3001';
 
 export default function ScanScreen() {
   const router = useRouter();
@@ -101,7 +102,6 @@ export default function ScanScreen() {
     const run = async () => {
       if (i >= steps.length) {
         try {
-          // Capturar foto según plataforma
           let fotoBase64: string | null = null;
           if (Platform.OS === 'web') {
             fotoBase64 = capturarFotoWeb();
