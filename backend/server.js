@@ -19,7 +19,7 @@ const FACEPP_API_SECRET = '0FvNd8BwEnA3FkKG7TLEhidXYVA8tjTw';
 
 /**
  * 🏠 RUTA RAÍZ (Evita el Error 404 en Vercel)
- * Al entrar directamente a https://banco-seguro-backend.vercel.app verás este mensaje
+ * Al entrar directamente a http://192.168.0.105:8081 verás este mensaje
  */
 app.get('/', (req, res) => {
     res.json({
@@ -117,3 +117,4 @@ const PORT = process.env.PORT || 8081;
 app.listen(PORT, () => {
     console.log(`🚀 Servidor Express ejecutándose en el puerto ${PORT}`);
 });
+

@@ -3,8 +3,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-// Tu backend local corriendo con tu IP de red privada
-const BACKEND_URL = 'http://192.168.0.105:3001';
+const BACKEND_URL = 'https://banco-seguro-backend.vercel.app';
 
 export default function ScanScreen() {
   const router = useRouter();
